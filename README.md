@@ -49,7 +49,8 @@ What the mode publishes (host registry, unsynced):
 |---|---|
 | `brawl.active` (bool) | true from the round's countdown until the results show. While it is true the mode respawns players: a map must not |
 | `brawl.phase` (string) | `lobby`, `ready` (3 s countdown), `fight`, `over` (results) |
-| `brawl.knocked.<p>` (bool) | true while player p is knocked down (kneeling; e.g. block a map's mantle for them) |
+| `brawl.knocked.<p>` (bool) | true while player p is knocked down (kneeling) |
+| `climbing.block.<p>` (bool, written by Brawl) | for the [Clamber](https://steamcommunity.com/sharedfiles/filedetails/?id=3835599376) mod (and maps' own mantles): true while p can't climb (lobby, countdown, results, knocked, eliminated, late joiners) |
 | `brawl.event.last` (int) | the newest event's number; it only grows (it survives Play Again) |
 | `brawl.event.<n % 16>.kind` | `round_start` (the fight begins), `round_end`, `knockdown`, `getup`, `eliminated`, `combo` |
 | `.victim`, `.attacker` (int) | player ids (0: none / the world); `eliminated`: the attacker who finished them |

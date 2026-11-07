@@ -27,6 +27,9 @@
 -- then damage. Combos: 3+ hits by one attacker on one victim, each within
 -- COMBO_GAP s. Tab: scoreboard. Results: the teams, the top fighter.
 -- Healing shows on every machine: a soft white aura and white crosses rising round the fighter (brawl_heal.lua).
+-- Climbing is Clamber's (a separate global mod, Workshop 3835599376: ladders, climbable walls, mantling - into a ring
+-- on any map): Brawl only tells it who can't climb now (climbing.block.<p>: the knocked, the eliminated, late joiners,
+-- everyone in the lobby, the countdown and the results). The Warehouse Ring's legacy mantle honours them too.
 -- Published for maps (host registry): brawl.active, brawl.phase, the event ring brawl.event.* (PROJECT.md).
 -- (Every script below only shares GLOBALS with its includes: an included file's locals are its own.)
 
@@ -251,6 +254,26 @@ local function event(kind, victim, attacker, team, hits)
 	publish(true)
 end
 
+-- Clamber (if the host runs it): who can't climb or mantle now - written on changes only, every tick (it reads them on
+-- the host; nobody else needs them)
+local function climbBlocks()
+	G.climbBlock = G.climbBlock or {}
+	local free = G.phase == "fight"
+	for p in Players() do
+		local F = G.fighters[p]
+		local block = not free or F == nil or F.knocked ~= nil or F.out == true or F.late == true
+		if G.climbBlock[p] ~= block then G.climbBlock[p] = block; SetBool("climbing.block." .. p, block) end
+	end
+	for p in pairs(G.climbBlock) do
+		if not IsPlayerValid(p) then G.climbBlock[p] = nil; SetBool("climbing.block." .. p, false) end
+	end
+end
+
+local function climbUnblockAll()
+	for p in pairs(G.climbBlock or {}) do SetBool("climbing.block." .. p, false) end
+	G.climbBlock = {}
+end
+
 local function setPhase(phase)
 	G.phase = phase
 	SetString("brawl.phase", phase)
@@ -279,6 +302,7 @@ end
 
 function server.destroy()
 	bvServerClear()
+	climbUnblockAll()
 	for p in Players() do SetBool("brawl.knocked." .. p, false) end
 	SetBool("brawl.active", false)
 	SetString("brawl.phase", "")
@@ -852,6 +876,7 @@ function server.tick(dt)
 	end
 	lobbyAutoJoin()
 	syncTeamCount()
+	climbBlocks()
 	if teamsTick(dt) then beginRound() end
 	chatKeys()
 	bvServerTick(not teamsIsSetup())                             -- (the lobby view: what lies above the host's cut hidden)
