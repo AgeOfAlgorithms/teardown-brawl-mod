@@ -73,6 +73,10 @@ function server.tick(dt)
 end
 ```
 
+## Community
+
+Join the [Discord community](https://discord.gg/gNpRewdkxf) to post bug reports and suggestions.
+
 ## Install
 
 Subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3833372098), or clone this repository into
