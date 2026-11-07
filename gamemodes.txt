@@ -1,0 +1,4 @@
+[Brawl]
+en_name = Brawl
+en_description = Teams fist-fight inside a fight area: damage only counts inside it. KOs score for your team; most KOs when the time runs out wins. Bare hands with the Combat System mod, weapons without it.
+path = brawl.lua
