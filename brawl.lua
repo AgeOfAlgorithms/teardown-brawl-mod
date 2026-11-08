@@ -76,7 +76,9 @@ TEAMS_KEY = "savegame.mod.brawl.teams"
 ROUND_KEY = "savegame.mod.brawl.roundsec"
 FF_KEY = "savegame.mod.brawl.ff"
 LOADOUT_KEY = "savegame.mod.brawl.loadout"
-EDIT_KEY = "brawl.edited"         -- (host registry, not savegame: the host's polygon for this session, with the level)
+EDIT_KEY = "savegame.mod.brawl.area"   -- the host's area per map, kept across restarts (the user: "once I edit a
+                                       -- fighting area, it should be saved"): EDIT_KEY.<slot>.area / .how / .level,
+                                       -- slot = a hash of the map (editSlot)
 
 local function clockLabel(v) return string.format("%d:%02d", math.floor(v / 60), v % 60) end
 
@@ -136,6 +138,14 @@ local function teamCount()
 end
 
 local function levelKey() return GetString("game.levelid") .. "@" .. GetString("game.levelpath") end
+
+-- the map's savegame slot: a 32-bit hash of levelKey() (registry key parts take no dots or slashes; the map's own key is
+-- stored beside it and checked, so a hash clash only loses an edit, never applies another map's)
+local function editSlot()
+	local s, h = levelKey(), 5381
+	for i = 1, #s do h = (h * 33 + s:byte(i)) % 4294967296 end
+	return EDIT_KEY .. ".m" .. string.format("%.0f", h)
+end
 
 -- (both) is the Combat System running: its tool's registry keys (it registers in its own init - another mod's init may
 -- run after ours: checked every second), or the tool enabled / held by any player (it enables its tool for everyone
@@ -288,10 +298,10 @@ function server.init()
 	teamsInit(G.nTeams)
 	teamsSetNames({unpack(TEAM_NAMES, 1, G.nTeams)})
 	teamsSetColors({unpack(TEAM_COLORS, 1, G.nTeams)})
-	local saved, lk = GetString(EDIT_KEY), levelKey() .. "|"
-	if saved:sub(1, #lk) == lk then                               -- (the host's polygon survives Play Again on this map)
-		G.editStr = baValidateArea(saved:sub(#lk + 1)) or ""
-		G.editHow = GetString(EDIT_KEY .. ".how") == "moved" and "moved" or "drawn"
+	local slot = editSlot()
+	if GetString(slot .. ".level") == levelKey() and GetString(slot .. ".area") ~= "" then   -- (the host's area for this map)
+		G.editStr = baValidateArea(GetString(slot .. ".area")) or ""
+		G.editHow = GetString(slot .. ".how") == "moved" and "moved" or "drawn"
 	end
 	G.combat = combatPresent()
 	for p in Players() do SetBool("brawl.knocked." .. p, false) end
@@ -329,15 +339,16 @@ function server.brawlSetArea(p, seq, str, how)
 		G.editErr = "only in the lobby"
 	elseif str == "" then
 		G.editStr = ""
-		ClearKey(EDIT_KEY)
-		ClearKey(EDIT_KEY .. ".how")
+		ClearKey(editSlot())
 	else
 		local clean, err = baValidateArea(str)
 		if clean then
 			G.editStr = clean
 			G.editHow = how == "moved" and "moved" or "drawn"
-			SetString(EDIT_KEY, levelKey() .. "|" .. clean)
-			SetString(EDIT_KEY .. ".how", G.editHow)
+			local slot = editSlot()
+			SetString(slot .. ".area", clean)
+			SetString(slot .. ".how", G.editHow)
+			SetString(slot .. ".level", levelKey())
 		else
 			G.editErr = err
 		end
