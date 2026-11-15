@@ -1,5 +1,5 @@
 [Brawl]
 en_name = Brawl
-en_description = Teams fist-fight inside a fight area: damage only counts inside it. KOs score for your team; most KOs when the time runs out wins. Bare hands with the Combat System mod, weapons without it.
+en_description = Teams fight inside a fight area: damage only counts inside it. Last team standing wins, or the most health left when the time runs out. With the McPuppet Inventory System: what you carry and wear, gold for the winners. Without it: bare hands (Combat System) or the host's weapons.
 path = brawl.lua
 preview = preview_td.jpg

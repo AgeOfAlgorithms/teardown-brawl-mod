@@ -30,6 +30,13 @@
 -- Climbing is Clamber's (a separate global mod, Workshop 3835599376: ladders, climbable walls, mantling - into a ring
 -- on any map): Brawl only tells it who can't climb now (climbing.block.<p>: the knocked, the eliminated, late joiners,
 -- everyone in the lobby, the countdown and the results). The Warehouse Ring's legacy mantle honours them too.
+-- With the McPuppet Inventory System (inventory.present): weapons are what players carry - Brawl gives and strips no
+-- tools (the lobby's Weapons row a fixed "Inventory"); with the Combat System too, its fist tool is put in the
+-- inventory's inventory.keeptools so both stay; inventory.keepondeath while a round runs (a knockdown is an engine
+-- death for a few frames: the inventory would drop everything); the armour's give-back (the inventory's wear engine
+-- returns the blocked share of a hit a tick later) is let through the health ledger (REFUND_WINDOW); no healing items
+-- while a round runs (inventory.healing = false, the user: other consumables - speed boosts - are fine); gold at the round's end (WIN_GOLD / LOSE_GOLD,
+-- inventory.goldadd). Without the Inventory nothing of this happens (legacy: the Combat System or the loadout).
 -- Published for maps (host registry): brawl.active, brawl.phase, the event ring brawl.event.* (PROJECT.md).
 -- (Every script below only shares GLOBALS with its includes: an included file's locals are its own.)
 
@@ -55,6 +62,9 @@ READY_TIME = 3            -- s countdown before the fight (frozen)
 GRACE = 0.5               -- s after a respawn / revive: health re-applied, no death detection (the engine reads 0 a frame)
 STRIP_EVERY = 2           -- s between tool strips (Combat System on)
 COMBAT_TOOL = "content_combat"
+WIN_GOLD, LOSE_GOLD = 250, 80   -- (the Inventory) gold at a round's end: each fighter of the winning team gets WIN_GOLD,
+                                -- each of the others loses LOSE_GOLD (the user); a draw pays nothing
+REFUND_WINDOW = 0.3       -- s after a counted hit in which a rise up to the health before it is allowed (armour)
 RANGED = {sledge = false, [COMBAT_TOOL] = false}   -- tools whose use from outside is NOT a shot (anything else is)
 EYE = 0.5                 -- m above the feet: the point tested against the area
 TEAMS_OWN_CAMERA = true     -- (mplib/teams.lua: its orbiting lobby camera off - the lobby shows brawl_view.lua's
@@ -87,23 +97,30 @@ local function clockLabel(v) return string.format("%d:%02d", math.floor(v / 60),
 -- its own key, so the stored weapons choice stays for a session without the Combat System. mplib reads the items
 -- every frame (a key it hasn't seen gets its first option)
 BAREHANDS_KEY = "savegame.mod.brawl.barehands"
-local settingsCombat
-function brawlSettings(combat)
-	if not combat then return SETTINGS end
-	if not settingsCombat then
+INVWEAPONS_KEY = "savegame.mod.brawl.invweapons"
+local settingsFixed = {}
+local function fixedWeapons(key, label, info)
+	if not settingsFixed[key] then
 		local items = {}
 		for _, it in ipairs(SETTINGS[1].items) do
 			if it.key == LOADOUT_KEY then
-				items[#items + 1] = {key = BAREHANDS_KEY, label = it.label,
-					info = "The Combat System mod is on: everyone fights with bare hands",
-					options = {{label = "Bare hands", value = "barehands"}}}
+				items[#items + 1] = {key = key, label = it.label, info = info, options = {{label = label, value = label}}}
 			else
 				items[#items + 1] = it
 			end
 		end
-		settingsCombat = {{title = SETTINGS[1].title, items = items}}
+		settingsFixed[key] = {{title = SETTINGS[1].title, items = items}}
 	end
-	return settingsCombat
+	return settingsFixed[key]
+end
+-- (with the Inventory, one fixed value too: "Inventory" - its items are the weapons, the Combat System's fists beside)
+function brawlSettings(combat, inv)
+	if inv then
+		return fixedWeapons(INVWEAPONS_KEY, "Inventory", combat and "The Inventory mod is on: everyone fights with what they carry, and bare hands (Combat System)"
+			or "The Inventory mod is on: everyone fights with what they carry")
+	end
+	if not combat then return SETTINGS end
+	return fixedWeapons(BAREHANDS_KEY, "Bare hands", "The Combat System mod is on: everyone fights with bare hands")
 end
 
 SETTINGS = {
@@ -168,6 +185,60 @@ function brawlCombatPresent()
 	return found
 end
 local function combatPresent() return brawlCombatPresent() end
+local function inventoryPresent() return GetBool("inventory.present") end
+
+-- the McPuppet Inventory System: with the Combat System too, its fist tool goes into inventory.keeptools (what's there
+-- kept; taken out again on destroy if we put it there)
+local function inventoryKeys()
+	if not (G.inv and G.combat) then return end
+	local s = GetString("inventory.keeptools")
+	for w in s:gmatch("%S+") do if w == COMBAT_TOOL then return end end
+	SetString("inventory.keeptools", s == "" and COMBAT_TOOL or (s .. " " .. COMBAT_TOOL))
+	G.keptAdded = true
+end
+
+-- (the Inventory) the round's keys: inventory.keepondeath = true and inventory.healing = false while a round runs;
+-- what was there before (another mod's, or nothing) is put back after (in the lobby, on destroy)
+local ROUND_KEYS = {{"inventory.keepondeath", true}, {"inventory.healing", false}}
+function inventoryRoundKeys(on)
+	G.roundKeys = G.roundKeys or {}
+	for _, kv in ipairs(ROUND_KEYS) do
+		local k, v = kv[1], kv[2]
+		local held = G.roundKeys[k]
+		if on then
+			if held == nil then G.roundKeys[k] = {had = HasKey(k), was = GetBool(k)} end
+			if not HasKey(k) or GetBool(k) ~= v then SetBool(k, v) end
+		elseif held ~= nil then
+			if held.had then SetBool(k, held.was) else ClearKey(k) end
+			G.roundKeys[k] = nil
+		end
+	end
+end
+
+local function inventoryRelease()
+	if G.keptAdded then
+		local out = {}
+		for w in GetString("inventory.keeptools"):gmatch("%S+") do if w ~= COMBAT_TOOL then out[#out + 1] = w end end
+		SetString("inventory.keeptools", table.concat(out, " "))
+		G.keptAdded = nil
+	end
+	inventoryRoundKeys(false)
+end
+
+-- (the Inventory) the round's gold: + for the winning team's fighters, - for the others' (not late joiners), appended to
+-- inventory.goldadd.<p> ("n:reason", _ shows as a space); a draw (winner 0) pays nothing
+function brawlPayGold(winner)
+	if not G.inv or not winner or winner == 0 then return end
+	for p, F in pairs(G.fighters) do
+		local t = teamsGetTeamId(p)
+		if t ~= 0 and not F.late and IsPlayerValid(p) then
+			local part = t == winner and ("+" .. WIN_GOLD .. ":Brawl_won") or ("-" .. LOSE_GOLD .. ":Brawl_lost")
+			local k = "inventory.goldadd." .. p
+			local was = GetString(k)
+			SetString(k, was == "" and part or (was .. " " .. part))
+		end
+	end
+end
 
 -- the area: the host's edit wins, then brawl.area (a map's or a mod's), then the map's brawl_area triggers, else none
 local function resolveArea(force)
@@ -221,7 +292,7 @@ publish = function(force)
 	end
 	local feed = {}
 	for i, e in ipairs(G.feed) do feed[i] = copy(e) end
-	shared.brawl = {phase = G.phase, t = G.t, clock = now, roundTime = G.roundTime, combat = G.combat, ff = G.ff,
+	shared.brawl = {phase = G.phase, t = G.t, clock = now, roundTime = G.roundTime, combat = G.combat, inv = G.inv, ff = G.ff,
 		loadout = G.loadout, nTeams = #shared._teamState.teams, src = G.area.src, area = G.area.str, areaSeq = G.area.seq,
 		areaBad = G.area.bad, editAck = G.editAck, editHow = G.editHow or "drawn", kos = copy(G.kos), knocks = copy(G.knocks), elims = copy(G.elims),
 		dmg = copy(G.dmg), teamKOs = copy(G.teamKOs), teamElims = copy(G.teamElims), inside = inside, out = out, late = late,
@@ -288,6 +359,8 @@ local function setPhase(phase)
 	G.phase = phase
 	SetString("brawl.phase", phase)
 	SetBool("brawl.active", phase == "ready" or phase == "fight")
+	inventoryRoundKeys(phase ~= "lobby")                        -- (the Inventory: keep everything through a round's knockdowns;
+	                                                             --  no healing items in a round)
 end
 
 function server.init()
@@ -304,6 +377,7 @@ function server.init()
 		G.editHow = GetString(slot .. ".how") == "moved" and "moved" or "drawn"
 	end
 	G.combat = combatPresent()
+	G.inv = inventoryPresent()
 	for p in Players() do SetBool("brawl.knocked." .. p, false) end
 	setPhase("lobby")
 	resolveArea(true)
@@ -313,6 +387,7 @@ end
 function server.destroy()
 	bvServerClear()
 	climbUnblockAll()
+	inventoryRelease()
 	for p in Players() do SetBool("brawl.knocked." .. p, false) end
 	SetBool("brawl.active", false)
 	SetString("brawl.phase", "")
@@ -412,6 +487,7 @@ end
 -- tools: with the Combat System only its tool (the others stripped every STRIP_EVERY s, it re-selected); without
 -- it the loadout setting
 local function giveLoadout(p)
+	if G.inv then return end                                     -- (the Inventory: what they carry)
 	local all = ListKeys("game.tool") or {}
 	if G.combat then
 		for _, id in ipairs(all) do if id ~= COMBAT_TOOL then SetToolEnabled(id, false, p) end end
@@ -428,7 +504,7 @@ local function giveLoadout(p)
 end
 
 local function keepTools(p, F, now)
-	if not G.combat then return end
+	if not G.combat or G.inv then return end
 	if now >= (F.nextStrip or 0) then
 		F.nextStrip = now + STRIP_EVERY
 		for _, id in ipairs(ListKeys("game.tool") or {}) do
@@ -717,8 +793,16 @@ local function fighters(dt, now)
 			keepTools(p, F, now)
 			if G.phase == "fight" and F.inside then
 				F.inAt = F.inAt or now
-				if cur < F.H - 1e-4 then F.H, F.lastHurt = cur, now
-				elseif cur > F.H + 1e-4 then SetPlayerHealth(F.H, p) end   -- (no other healing)
+				if cur < F.H - 1e-4 then
+					F.preHit = (F.hitT and now - F.hitT <= REFUND_WINDOW) and math.max(F.preHit or F.H, F.H) or F.H
+					F.H, F.lastHurt, F.hitT = cur, now, now
+				elseif cur > F.H + 1e-4 then
+					if G.inv and F.hitT and now - F.hitT <= REFUND_WINDOW and cur <= (F.preHit or F.H) + 1e-4 then
+						F.H = cur                                              -- (armour: the blocked share back)
+					else
+						SetPlayerHealth(F.H, p)                                -- (no other healing)
+					end
+				end
 				if now - math.max(F.lastHurt, F.inAt) >= HEAL_DELAY and F.H < 1 then   -- (HEAL_DELAY s in, unhurt)
 					F.H = math.min(1, F.H + HEAL_RATE * dt)
 					SetPlayerHealth(F.H, p)
@@ -754,6 +838,7 @@ local function beginRound()
 	math.randomseed(math.floor(GetTime() * 1000) % 1000000 + GetInt("savegame.mod.brawl.rounds") * 7919)
 	for _ = 1, 5 do math.random() end
 	G.combat = combatPresent()
+	G.inv = inventoryPresent()
 	resolveArea(false)
 	for p in pairs(G.fighters) do SetBool("brawl.knocked." .. p, false) end
 	G.kos, G.knocks, G.elims, G.dmg, G.combos, G.feed, G.fighters, G.winner, G.top = {}, {}, {}, {}, {}, {}, {}, 0, 0
@@ -846,6 +931,7 @@ local function endRound(winner)
 	if winner == nil then winner, alive, why = ranking()
 	else why = winner ~= 0 and "last team standing" or "no team left" end
 	G.winner, G.winWhy = winner, why
+	brawlPayGold(winner)                                         -- (the Inventory: the round's gold)
 	G.t = 0
 	local top, tk, td = 0, -1, -1                                   -- the top fighter: knockdowns, then damage dealt
 	for p in Players() do
@@ -883,6 +969,8 @@ function server.tick(dt)
 	if now - G.areaT >= 1 then
 		G.areaT = now
 		G.combat = combatPresent()
+		G.inv = inventoryPresent()
+		inventoryKeys()
 		resolveArea(false)
 	end
 	lobbyAutoJoin()
@@ -1075,7 +1163,9 @@ local function drawLobbyPanel(b)
 	local host = IsPlayerHost(me)
 	local lines = {}
 	local combat = b.combat or brawlCombatPresent()                 -- (the server's word, or this machine's own look)
-	lines[1] = combat and {"Bare hands: Combat System found", 0.5, 1, 0.5}
+	local inv = b.inv or GetBool("inventory.present")
+	lines[1] = inv and {combat and "Weapons: the Inventory's, and bare hands (Combat System)" or "Weapons: what players carry (Inventory)", 0.5, 1, 0.5}
+		or combat and {"Bare hands: Combat System found", 0.5, 1, 0.5}
 		or {"Combat System not enabled: weapons", 1, 0.75, 0.3}
 	lines[2] = {(b.src == "host" and b.editHow == "moved") and "Fight area: moved by the host" or (SRC_TEXT[b.src] or SRC_TEXT.none), 1, 0.6, 0.15}
 	if b.src == "host" and baUnbounded(baParse(b.area)) then lines[2][1] = lines[2][1] .. " - every floor counts" end
@@ -1083,6 +1173,7 @@ local function drawLobbyPanel(b)
 	lines[#lines + 1] = {"You start at " .. math.floor(START_HEALTH * 100 + 0.5) .. " % health. Damage counts only inside the area,"
 		.. " and you heal only there: after " .. HEAL_DELAY .. " s inside without a hit.", 0.85, 0.85, 0.85}
 	lines[#lines + 1] = {"At 0 health: knocked down " .. KNOCK_TIME .. " s - hit them again to knock them out of the round.", 0.85, 0.85, 0.85}
+	if inv then lines[#lines + 1] = {"Winners +" .. WIN_GOLD .. " gold each, the others -" .. LOSE_GOLD .. ". No healing items in a round.", 1, 0.82, 0.3} end
 	BRAWL_LOBBY_LINES = {}
 	for i, l in ipairs(lines) do BRAWL_LOBBY_LINES[i] = l[1] end
 	local w = 560
@@ -1159,7 +1250,7 @@ local function drawLobby(b, dt)
 	C.panelRect = nil
 	if b and not (_hud.settings and _hud.settings.visible) then drawLobbyPanel(b) end
 	if not hudGameIsSetup() then
-		if hudDrawGameSetup(brawlSettings(b and b.combat or brawlCombatPresent())) and not opening then
+		if hudDrawGameSetup(brawlSettings(b and b.combat or brawlCombatPresent(), (b and b.inv) or GetBool("inventory.present"))) and not opening then
 			ServerCall("server.start", {roundTime = GetFloat(ROUND_KEY), ff = GetString(FF_KEY), loadout = GetString(LOADOUT_KEY)})
 		end
 	end
@@ -1392,7 +1483,7 @@ local function drawReady(b, me)
 	end
 	bigText(UiMiddle() - 150, 30, "You fight for " .. teamName(mine), c[1], c[2], c[3])
 	bigText(UiMiddle() - 40, 120, tostring(math.max(1, math.ceil(b.t))), 1, 1, 1)
-	bigText(UiMiddle() + 60, 22, (b.combat and "Bare hands (Combat System)" or "Weapons") .. " - into the ring!", 0.85, 0.85, 0.85)
+	bigText(UiMiddle() + 60, 22, (b.inv and "Your inventory" or b.combat and "Bare hands (Combat System)" or "Weapons") .. " - into the ring!", 0.85, 0.85, 0.85)
 end
 
 local function drawResults(b)

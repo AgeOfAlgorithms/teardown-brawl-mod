@@ -1,6 +1,6 @@
 name = Brawl
 author = AgeOfAlgorithms and Claude
-description = Team fist-fight game mode for any map, 2-4 teams. Turn on the Combat System mod (Workshop 3822172014) for bare hands; without it, weapons. Damage only counts inside the fight area (a map's area, or one the host drags or draws in the lobby). At 0 health you're knocked down for 10 s - hit again and you're out; last team standing wins, or the most health left when time runs out.
+description = Team fight game mode for any map, 2-4 teams. Made for the McPuppet Inventory System (Workshop 3840357667): fists, the weapons you carry, your armour, gold for the winners. Without it: bare hands with the Combat System mod, else the host's weapons. Damage only counts inside the fight area (a map's area, or one the host drags or draws in the lobby). At 0 health you're knocked down for 10 s - hit again and you're out; last team standing wins, or the most health left when time runs out.
 tags = Gameplay
 version = 2
 preview = preview_td.jpg

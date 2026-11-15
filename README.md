@@ -1,4 +1,4 @@
-# Brawl - a team fist-fight game mode for any map
+# Brawl - a team fight game mode for any map
 
 ![Brawl](preview.jpg)
 
@@ -13,8 +13,11 @@ the attacker's team, an elimination once more. The last team with fighters left 
 the team with the most of its starting health left, as a percentage (fair for smaller teams; knocked fighters
 count 0), then knockdowns, then damage. Players who join mid-round spectate and play from the next round.
 
-- Enable the **Combat System** mod (Workshop 3822172014) as a global mod and everyone fights with bare hands
-  (punches, kicks, blocks): every other tool is taken away. Without it, everyone fights with weapons (lobby setting).
+- Made for the **McPuppet Inventory System** (Workshop 3840357667): everyone fights with what they carry (fists,
+  melee weapons, guns), armour blocks its share of every hit, a knockdown drops nothing, no healing items in a round,
+  and the winning team's players get +250 gold each, everyone else -80 (a draw: nothing).
+- Without the Inventory (legacy): with the **Combat System** mod (Workshop 3822172014) everyone fights with bare hands
+  (punches, kicks, blocks; every other tool taken away); without either, with weapons (lobby setting).
 - **Tab** shows the scoreboard (teams, KOs, damage dealt, deaths).
 - The lobby shows the map from above as a cross-section: everything lying wholly above a height (roofs, ceilings) is
   hidden - the bar at the right shows "Hide above: 9.7 m"; on auto it sits just under the ceiling of the building in
@@ -26,7 +29,7 @@ count 0), then knockdowns, then damage. Players who join mid-round spectate and 
 
 The mode reads the host's registry (set it from a server script; no sync needed). First match wins:
 
-1. The host's own polygon drawn in the lobby (for that session).
+1. The host's own area drawn or moved in the lobby (saved for that map).
 2. `brawl.area` (string), set before or while the lobby runs; re-read every second. Parts separated by `;`:
    - `box x0 y0 z0 x1 y1 z1` - an axis-aligned world box (metres, any two opposite corners)
    - `cyl x y z radius height` - a vertical cylinder standing on y, up to y + height
