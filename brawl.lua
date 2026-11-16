@@ -215,7 +215,18 @@ function inventoryRoundKeys(on)
 	end
 end
 
+-- (the Inventory) no gold lying around the map in Brawl (the user, 2026-11-16): inventory.scatter = false for the whole
+-- mode, the lobby too (the Inventory removes its piles); what was there before is put back on destroy
+local function inventoryScatterOff()
+	if G.scatterWas == nil then G.scatterWas = {had = HasKey("inventory.scatter"), was = GetBool("inventory.scatter")} end
+	SetBool("inventory.scatter", false)
+end
+
 local function inventoryRelease()
+	if G.scatterWas then
+		if G.scatterWas.had then SetBool("inventory.scatter", G.scatterWas.was) else ClearKey("inventory.scatter") end
+		G.scatterWas = nil
+	end
 	if G.keptAdded then
 		local out = {}
 		for w in GetString("inventory.keeptools"):gmatch("%S+") do if w ~= COMBAT_TOOL then out[#out + 1] = w end end
@@ -378,6 +389,7 @@ function server.init()
 	end
 	G.combat = combatPresent()
 	G.inv = inventoryPresent()
+	inventoryScatterOff()
 	for p in Players() do SetBool("brawl.knocked." .. p, false) end
 	setPhase("lobby")
 	resolveArea(true)
