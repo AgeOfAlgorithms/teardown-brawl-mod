@@ -6,12 +6,12 @@ On the Steam Workshop: [Brawl](https://steamcommunity.com/sharedfiles/filedetail
 
 Teams (2-4, the host picks) brawl inside a fight area. Damage only counts inside it: a hit on someone outside, or
 from someone outside, does nothing. Inside, after 5 s without taking damage you heal slowly; outside you never heal.
-Everyone spawns outside the area, each team on its own side. At 0 health inside you are KNOCKED DOWN: kneeling
-for 10 s with chicks circling your head, unable to move or hit, with a second health bar - more hits empty it and you
-are out of the round (spectating); hold out and you get back up with a third of your health. A knockdown scores for
-the attacker's team, an elimination once more. The last team with fighters left wins; when the timer reaches 0:00
-the team with the most of its starting health left, as a percentage (fair for smaller teams; knocked fighters
-count 0), then knockdowns, then damage. Players who join mid-round spectate and play from the next round.
+Everyone spawns outside the area, each team on its own side. At 0 health inside you are DOWN until a teammate revives
+you: on all fours with chicks circling your head, crawling slowly (never out of the area), unable to fight or climb;
+hits do nothing. A teammate standing inside the area holds E next to you for 5 s: up with a third of your health. A
+knockdown scores for the attacker's team, a revive for the helper. A team with everyone down has lost: the last team
+with someone standing wins; when the timer reaches 0:00 the team with the most of its full health left, as a
+percentage (fair for smaller teams; downed fighters count 0), then knockdowns, then damage. Players who join mid-round spectate and play from the next round.
 
 - Made for the **McPuppet Inventory System** (Workshop 3840357667): everyone fights with what they carry (fists,
   melee weapons, guns), armour blocks its share of every hit, a knockdown drops nothing, no healing items in a round,
@@ -52,12 +52,12 @@ What the mode publishes (host registry, unsynced):
 |---|---|
 | `brawl.active` (bool) | true from the round's countdown until the results show. While it is true the mode respawns players: a map must not |
 | `brawl.phase` (string) | `lobby`, `ready` (3 s countdown), `fight`, `over` (results) |
-| `brawl.knocked.<p>` (bool) | true while player p is knocked down (kneeling) |
-| `climbing.block.<p>` (bool, written by Brawl) | for the [Clamber](https://steamcommunity.com/sharedfiles/filedetails/?id=3835599376) mod (and maps' own mantles): true while p can't climb (lobby, countdown, results, knocked, eliminated, late joiners) |
+| `brawl.knocked.<p>` (bool) | true while player p is down (until revived) |
+| `climbing.block.<p>` (bool, written by Brawl) | for the [Clamber](https://steamcommunity.com/sharedfiles/filedetails/?id=3835599376) mod (and maps' own mantles): true while p can't climb (lobby, countdown, results, downed, late joiners) |
 | `brawl.event.last` (int) | the newest event's number; it only grows (it survives Play Again) |
-| `brawl.event.<n % 16>.kind` | `round_start` (the fight begins), `round_end`, `knockdown`, `getup`, `eliminated`, `combo` |
-| `.victim`, `.attacker` (int) | player ids (0: none / the world); `eliminated`: the attacker who finished them |
-| `.team` (int) | `round_end`: the winning team (0: a draw); `knockdown` / `eliminated` / `combo`: the attacker's team (0: no point scored); `getup`: the victim's team |
+| `brawl.event.<n % 16>.kind` | `round_start` (the fight begins), `round_end`, `knockdown`, `getup` (a revive), `combo` |
+| `.victim`, `.attacker` (int) | player ids (0: none / the world); `getup`: the attacker field is the teammate who revived them |
+| `.team` (int) | `round_end`: the winning team (0: a draw); `knockdown` / `combo`: the attacker's team (0: no point scored); `getup`: the victim's team |
 | `.hits` (int) | `combo`: hits in the chain so far (3 and up; one event per further hit) |
 | `.time` (float) | GetTime() when it happened |
 

@@ -19,16 +19,16 @@
 -- air). Everyone starts a round at START_HEALTH: after HEAL_DELAY s inside the area without damage, health comes back
 -- slowly to full; outside it never rises.
 -- Lobby (mplib): 2-4 teams (host), round length, friendly fire, the weapons loadout. Everyone spawns OUTSIDE the
--- area, each team on its own side. Health at 0 inside the area (the fight): KNOCKED DOWN, kneeling in place with chicks
--- circling the head for KNOCK_TIME s, no moving, no tool, a second smaller bar (KNOCK_HP) that only hits drain; it
--- empties: ELIMINATED for the round (spectating); it holds: up again with GETUP_HEALTH. A knockdown scores for the
--- attacker's team, an elimination once more. The round ends when one team (or none) has fighters left, else at the
--- time: the most health left (the summed health of the fighters still in; a knocked one counts 0), then knockdowns,
+-- area, each team on its own side. Health at 0 inside the area (the fight): KNOCKED DOWN until a teammate revives them
+-- (the user: a downed player never dies) - crawling on all fours with chicks circling the head, never out of the area,
+-- no tool, hits do nothing; a teammate holding E next to them REVIVE_TIME s gets them up with GETUP_HEALTH. A knockdown
+-- scores for the attacker's team, a revive for the helper. The round ends when one team (or none) has fighters standing
+-- (everyone else down), else at the time: the most health left (a downed one counts 0), then knockdowns,
 -- then damage. Combos: 3+ hits by one attacker on one victim, each within
 -- COMBO_GAP s. Tab: scoreboard. Results: the teams, the top fighter.
 -- Healing shows on every machine: a soft white aura and white crosses rising round the fighter (brawl_heal.lua).
 -- Climbing is Clamber's (a separate global mod, Workshop 3835599376: ladders, climbable walls, mantling - into a ring
--- on any map): Brawl only tells it who can't climb now (climbing.block.<p>: the knocked, the eliminated, late joiners,
+-- on any map): Brawl only tells it who can't climb now (climbing.block.<p>: the downed, late joiners,
 -- everyone in the lobby, the countdown and the results). The Warehouse Ring's legacy mantle honours them too.
 -- With the McPuppet Inventory System (inventory.present): weapons are what players carry - Brawl gives and strips no
 -- tools (the lobby's Weapons row a fixed "Inventory"); with the Combat System too, its fist tool is put in the
@@ -45,10 +45,10 @@ HEAL_DELAY = 5            -- s inside the area (in the fight) and without damage
 HEAL_RATE = 0.04          -- health per second while healing (1 = full)
 SHOT_FLIGHT = 3           -- s after a ranged shot fired from OUTSIDE the area during which that shooter's hits (and
                           -- unattributed ones) don't count: a rocket fired outside must not land once they step in
-KNOCK_TIME = 10           -- s a knocked-down fighter kneels (the user)
-KNOCK_HP = 1.0            -- the knock bar: as big as the health bar (the user; it was 0.35)
-GETUP_HEALTH = 1 / 3      -- health when they get up (the user: a third)
-KNOCK_EXIT = 0.4          -- s out of the pose before the death (a ragdoll started from the pose was flung: HvC)
+CRAWL_SPEED = 7.0 / 3     -- m/s a downed fighter crawls (a third of walking, as Humans vs Clickers' downed)
+REVIVE_TIME = 5           -- s (the user: 4 was too short) a teammate holds interact (E) next to a downed fighter to get them up
+REVIVE_RANGE = 2.2        -- m
+GETUP_HEALTH = 1 / 3      -- health when they're revived (the user: a third)
 KNOCK_PUB = 0.1           -- s between knock-state publishes (shared.brawlKnock)
 SPAWN_SIDE = 1.2          -- m between teammates at a spawn
 CHICKS = 3                -- chicks round a knocked player's head
@@ -144,7 +144,7 @@ SETTINGS = {
 
 local G = {phase = "lobby", t = 0, roundTime = 300, ff = false, loadout = "guns", combat = false, frame = 0,
 	area = {src = "none", shapes = {}, str = "", seq = 0, bad = 0}, editStr = "", editAck = 0, areaT = -100,
-	kos = {}, knocks = {}, elims = {}, dmg = {}, teamKOs = {}, teamElims = {}, contested = false, knockPubT = -100, fighters = {}, combos = {}, seen = {}, feed = {}, winner = 0,
+	kos = {}, knocks = {}, revives = {}, dmg = {}, teamKOs = {}, contested = false, knockPubT = -100, fighters = {}, combos = {}, seen = {}, feed = {}, winner = 0,
 	top = 0, pubT = -100, nTeams = 4, spawns = {}}
 BRAWL_G = G                                                        -- (the offline tests read it)
 local publish                                                      -- (below: resolveArea publishes a change at once)
@@ -305,23 +305,23 @@ publish = function(force)
 	for i, e in ipairs(G.feed) do feed[i] = copy(e) end
 	shared.brawl = {phase = G.phase, t = G.t, clock = now, roundTime = G.roundTime, combat = G.combat, inv = G.inv, ff = G.ff,
 		loadout = G.loadout, nTeams = #shared._teamState.teams, src = G.area.src, area = G.area.str, areaSeq = G.area.seq,
-		areaBad = G.area.bad, editAck = G.editAck, editHow = G.editHow or "drawn", kos = copy(G.kos), knocks = copy(G.knocks), elims = copy(G.elims),
-		dmg = copy(G.dmg), teamKOs = copy(G.teamKOs), teamElims = copy(G.teamElims), inside = inside, out = out, late = late,
+		areaBad = G.area.bad, editAck = G.editAck, editHow = G.editHow or "drawn", kos = copy(G.kos), knocks = copy(G.knocks), revives = copy(G.revives),
+		dmg = copy(G.dmg), teamKOs = copy(G.teamKOs), inside = inside, out = out, late = late,
 		healing = healing, feed = feed, winner = G.winner, top = G.top, contested = G.contested, winWhy = G.winWhy or "",
 		teamHP = (G.phase == "fight" or G.phase == "over") and brawlTeamHP() or {},
 		teamPct = (G.phase == "fight" or G.phase == "over") and brawlTeamPct() or {}}
 end
 
 -- the knocked (for every machine's pose, chicks and bars), KNOCK_PUB s apart and at once on a change of who:
--- shared.brawlKnock = {n = seq, k = {[p] = {left = s, bar = 0..1}}} (a fighter on the way out - dieAt - not in it)
+-- shared.brawlKnock = {n = seq, k = {[p] = {rev = 0..1 (a revive's progress), h = the reviver or 0}}}
 local function publishKnock(force)
 	local now = GetTime()
 	local k, who = {}, ""
 	for p, F in pairs(G.fighters) do
 		local K = F.knocked
-		if K and not K.dieAt then
-			k[p] = {left = math.max(0, KNOCK_TIME - (now - K.t0)), bar = math.max(0, K.bar / KNOCK_HP)}
-			who = who .. p .. ","
+		if K then
+			k[p] = {rev = math.floor((K.rev or 0) * 20 + 0.5) / 20, h = K.helper or 0}
+			who = who .. p .. ":" .. k[p].rev .. ":" .. k[p].h .. ","
 		end
 	end
 	if not force and who == G.knockWho and now - G.knockPubT < KNOCK_PUB then return end
@@ -617,14 +617,15 @@ end
 local function enemy(k, p) return k and k ~= 0 and k ~= p and G.fighters[k] ~= nil and teamOf(k) ~= teamOf(p) end
 
 -- knocked down (a killing blow inside, in the fight): back on the spot at once (the engine can't survive a hit - Humans
--- vs Clickers' verified way), kneeling KNOCK_TIME s; the engine's health held at 1, hits go to the knock bar instead
+-- vs Clickers' verified way), DOWN until a teammate revives them (the user: "a downed player never dies ... the team
+-- with downed player can still go for a revive anytime"): crawling, the engine's health held at 1, hits do nothing
 local function knock(p, F, k, now)
 	local t = GetPlayerTransform(p)
 	RespawnPlayerAtTransform(Transform(t.pos, t.rot), p)
 	SetPlayerHealth(1, p)
 	k = k or 0
 	F.H, F.pend, F.killer, F.diedBy, F.grace = 1, nil, nil, nil, now + GRACE
-	F.knocked = {t0 = now, bar = KNOCK_HP, by = k, last = enemy(k, p) and k or 0}
+	F.knocked = {t0 = now, by = k, rev = 0, lastIn = VecCopy(t.pos)}
 	G.knocks[p] = (G.knocks[p] or 0) + 1
 	local team = 0
 	if enemy(k, p) then
@@ -637,51 +638,28 @@ local function knock(p, F, k, now)
 	event("knockdown", p, k, team)
 end
 
--- out of the round: the bar emptied (or the engine killed them while knocked); they spectate until the round ends
-local function eliminate(p, F)
-	local K = F.knocked or {}
-	F.knocked, F.out = nil, true
-	if GetPlayerHealth(p) > 0 then SetPlayerHealth(0, p) end
-	local k = (K.last and K.last ~= 0) and K.last or (K.by or 0)
-	local team = 0
-	if enemy(k, p) then
-		G.elims[k] = (G.elims[k] or 0) + 1
-		team = teamOf(k)
-		G.teamElims[team] = (G.teamElims[team] or 0) + 1
-	else
-		k = 0
-	end
-	SetBool("brawl.knocked." .. p, false)
-	event("eliminated", p, k, team)
-end
-
-local function getUp(p, F, now)
+-- revived (a teammate held interact next to them REVIVE_TIME s): up with GETUP_HEALTH, a revive for the helper
+local function getUp(p, F, now, helper)
 	F.knocked = nil
+	if helper then G.revives[helper] = (G.revives[helper] or 0) + 1 end
 	F.H, F.lastHurt = GETUP_HEALTH, now                           -- (healing again HEAL_DELAY s from now)
 	SetPlayerHealth(GETUP_HEALTH, p)
 	if G.combat then F.nextSel = 0
 	elseif F.tool and F.tool ~= "" and F.tool ~= "none" then SetPlayerTool(F.tool, p) end
 	SetBool("brawl.knocked." .. p, false)
-	event("getup", p, 0, teamOf(p))
+	event("getup", p, helper or 0, teamOf(p))
 end
 
 local function handleHurt(v, b, a, k, now)
 	local F = G.fighters[v]
 	if F and (F.out or F.late or F.pend) then return end         -- (out, or already dying: nothing to count or undo)
 	local valid = G.phase == "fight" and F ~= nil and brawlInside(v) and attackerOk(k, v)
-	if F and F.knocked then                                       -- knocked: hits go to the knock bar
-		local K = F.knocked
-		if K.dieAt then return end
-		if valid then
-			K.bar = K.bar - (b - a)
-			if enemy(k, v) then
-				K.last = k
-				G.dmg[k] = (G.dmg[k] or 0) + (b - a)
-			end
-			if a <= 0 then eliminate(v, F); return end            -- (the engine killed them anyway: the bar is empty)
+	if F and F.knocked then                                       -- downed: a hit does nothing (they can't die in a round)
+		if GetPlayerHealth(v) <= 0 then                           -- (a blow over the held health: back on the spot, still down)
+			RespawnPlayerAtTransform(GetPlayerTransform(v), v)
+			F.grace = now + GRACE
 		end
-		if GetPlayerHealth(v) <= 0 then revive(v, F, 1)            -- (a blow that doesn't count: still kneeling)
-		else SetPlayerHealth(1, v) end
+		SetPlayerHealth(1, v)
 		return
 	end
 	if valid then
@@ -725,32 +703,48 @@ local function processDied()
 	end
 end
 
--- a knocked fighter, every tick: kneeling in place (no walking, no jump, no sideways motion, no tool), the engine's
--- health held at 1 (hits drain the knock bar in handleHurt; the bar does NOT drain by time); KNOCK_TIME s with some
--- bar left: up with a third of their health; the bar empty: out of the pose first, dead KNOCK_EXIT s later (a ragdoll
--- started from the pose was flung - Humans vs Clickers)
-local function knockTick(p, F, now)
+-- a downed fighter, every tick: crawling (CRAWL_SPEED, no jump, no upward motion, no tool), never out of the fight area
+-- (a step that would leave it is stopped; found outside anyway: put back where they last were inside), the engine's
+-- health held at 1 (a death in any other way: back on the spot, still down); a teammate - in the fight, standing - holding
+-- interact within REVIVE_RANGE m for REVIVE_TIME s (the same one all along) gets them up - only from inside the area (the
+-- user: "only teammates inside the ring who are battle-ready can revive")
+local function knockTick(p, F, now, dt)
 	local K = F.knocked
-	SetPlayerParam("walkingSpeed", 0, p)
+	SetPlayerParam("walkingSpeed", CRAWL_SPEED, p)
 	SetPlayerParam("jumpSpeed", 0, p)
-	local v = GetPlayerVelocity(p)
-	if math.abs(v[1]) + math.abs(v[3]) > 0.01 or v[2] > 0 then SetPlayerVelocity(Vec(0, math.min(v[2], 0), 0), p) end
+	local pos, v = GetPlayerTransform(p).pos, GetPlayerVelocity(p)
+	if v[2] > 0 then v = Vec(v[1], 0, v[3]); SetPlayerVelocity(v, p) end
 	if GetPlayerTool(p) ~= "none" then SetPlayerTool("none", p) end
-	if K.dieAt then
-		if now >= K.dieAt then eliminate(p, F) end
-		return
+	if G.area.src ~= "none" then
+		local ahead = VecAdd(pos, Vec(v[1] * 0.1, EYE, v[3] * 0.1))
+		if brawlInside(p) then
+			K.lastIn = VecCopy(pos)
+			if (math.abs(v[1]) + math.abs(v[3]) > 0.01) and not baInside(G.area.shapes, ahead) then
+				SetPlayerVelocity(Vec(0, math.min(v[2], 0), 0), p)       -- (the edge of the area: no further)
+			end
+		elseif K.lastIn then
+			SetPlayerTransform(Transform(K.lastIn, GetPlayerTransform(p).rot), p)
+			SetPlayerVelocity(Vec(0, 0, 0), p)
+		end
 	end
 	local cur = GetPlayerHealth(p)
-	if now >= F.grace then
-		if cur <= 0 then eliminate(p, F); return end              -- (killed with no event to read: the bar is gone)
-		if cur < 1 - 1e-4 then K.bar = K.bar - (1 - cur) end      -- (damage without an event: off the bar too)
+	if cur <= 0 and now >= F.grace then
+		RespawnPlayerAtTransform(GetPlayerTransform(p), p)
+		F.grace = now + GRACE
 	end
 	if math.abs(cur - 1) > 1e-4 then SetPlayerHealth(1, p) end
-	if K.bar <= 0 then
-		K.bar, K.dieAt = 0, now + KNOCK_EXIT
-	elseif now - K.t0 >= KNOCK_TIME then
-		getUp(p, F, now)
+	local helper = nil
+	for h, H in pairs(G.fighters) do
+		if h ~= p and not H.knocked and not H.out and not H.late and teamOf(h) == teamOf(p) and IsPlayerValid(h)
+			and GetPlayerHealth(h) > 0 and brawlInside(h) and InputDown("interact", h)   -- (the user: only battle-ready
+			                                                                            --  teammates inside the area)
+			and VecLength(VecSub(GetPlayerTransform(h).pos, pos)) <= REVIVE_RANGE then
+			if helper == nil or h == K.helper then helper = h end
+		end
 	end
+	if helper and helper == K.helper then K.rev = K.rev + (dt or 0) / REVIVE_TIME else K.rev = 0 end
+	K.helper = helper
+	if K.rev >= 1 then getUp(p, F, now, helper) end
 end
 
 -- each fighter's health, every tick: inside (fight) it only goes down by damage and up by our healing; outside, and
@@ -783,7 +777,7 @@ local function fighters(dt, now)
 		elseif F.out then
 			if cur > 0 then SetPlayerHealth(0, p) end             -- (out: dead, spectating)
 		elseif F.knocked then
-			knockTick(p, F, now)
+			knockTick(p, F, now, dt)
 		elseif now < F.grace then
 			if math.abs(cur - F.H) > 1e-3 then SetPlayerHealth(F.H, p) end
 			keepTools(p, F, now)
@@ -830,11 +824,12 @@ local function fighters(dt, now)
 	for p in pairs(G.fighters) do if not present[p] then G.fighters[p] = nil; SetBool("brawl.knocked." .. p, false) end end
 end
 
--- the teams still in (a fighter not out, present); the early end needs a round that began with 2 teams or more
+-- the teams still in (a fighter standing: not down, not out, present); the early end needs a round that began with 2
+-- teams or more - a team whose fighters are all down has lost (nobody left to revive them)
 local function teamsIn()
 	local alive, n, last = {}, 0, 0
 	for p, F in pairs(G.fighters) do
-		if not F.out and not F.late then
+		if not F.out and not F.late and not F.knocked then
 			local t = teamOf(p)
 			if t ~= 0 then
 				if not alive[t] then n, last = n + 1, t end
@@ -853,9 +848,9 @@ local function beginRound()
 	G.inv = inventoryPresent()
 	resolveArea(false)
 	for p in pairs(G.fighters) do SetBool("brawl.knocked." .. p, false) end
-	G.kos, G.knocks, G.elims, G.dmg, G.combos, G.feed, G.fighters, G.winner, G.top = {}, {}, {}, {}, {}, {}, {}, 0, 0
-	G.teamKOs, G.teamElims, G.winWhy, G.shotOut = {}, {}, "", nil
-	for i = 1, #shared._teamState.teams do G.teamKOs[i], G.teamElims[i] = 0, 0 end
+	G.kos, G.knocks, G.revives, G.dmg, G.combos, G.feed, G.fighters, G.winner, G.top = {}, {}, {}, {}, {}, {}, {}, 0, 0
+	G.teamKOs, G.winWhy, G.shotOut = {}, "", nil
+	for i = 1, #shared._teamState.teams do G.teamKOs[i] = 0 end
 	local placed = {}
 	for p in Players() do
 		local F = newFighter()
@@ -1117,7 +1112,7 @@ function client.tick(dt)
 	if b.phase == "ready" or b.phase == "fight" or b.phase == "over" then
 		SetBool("game.disablemap", true)                         -- (Tab is the scoreboard)
 	end
-	bkClientTick(dt)                                             -- (the knocked: kneeling, chicks)
+	bkClientTick(dt)                                             -- (the downed: crawling, chicks)
 	bhClientTick(dt)                                             -- (the healing: aura, rising crosses)
 	brawlSpectateTick(b, GetLocalPlayer())
 end
@@ -1184,7 +1179,7 @@ local function drawLobbyPanel(b)
 	if (b.areaBad or 0) > 0 then lines[#lines + 1] = {"(brawl.area: " .. b.areaBad .. " part(s) could not be read)", 1, 0.4, 0.4} end
 	lines[#lines + 1] = {"You start at " .. math.floor(START_HEALTH * 100 + 0.5) .. " % health. Damage counts only inside the area,"
 		.. " and you heal only there: after " .. HEAL_DELAY .. " s inside without a hit.", 0.85, 0.85, 0.85}
-	lines[#lines + 1] = {"At 0 health: knocked down " .. KNOCK_TIME .. " s - hit them again to knock them out of the round.", 0.85, 0.85, 0.85}
+	lines[#lines + 1] = {"At 0 health you're down: crawl. A teammate standing inside the area holds E next to you for " .. REVIVE_TIME .. " s to get you up. A team with everyone down loses.", 0.85, 0.85, 0.85}
 	if inv then lines[#lines + 1] = {"Winners +" .. WIN_GOLD .. " gold each, the others -" .. LOSE_GOLD .. ". No healing items in a round.", 1, 0.82, 0.3} end
 	BRAWL_LOBBY_LINES = {}
 	for i, l in ipairs(lines) do BRAWL_LOBBY_LINES[i] = l[1] end
@@ -1289,7 +1284,7 @@ end
 local function teamIn(b, i)
 	local n = 0
 	for _, p in ipairs(teamsGetTeamPlayers(i)) do
-		if IsPlayerValid(p) and not (b.out or {})[p] and not (b.late or {})[p] then n = n + 1 end
+		if IsPlayerValid(p) and not (b.out or {})[p] and not (b.late or {})[p] and not bkKnocked()[p] then n = n + 1 end   -- (standing)
 	end
 	return n
 end
@@ -1307,20 +1302,20 @@ local function sortedTeams(b)
 	return l
 end
 
-local COLUMNS = {{name = "KOs", align = "center"}, {name = "Elims", align = "center"}, {name = "Damage", align = "center"},
+local COLUMNS = {{name = "KOs", align = "center"}, {name = "Revives", align = "center"}, {name = "Damage", align = "center"},
 	{name = "Status", align = "center"}}
 
 local function status(b, p)
 	if (b.late or {})[p] then return "joined late" end
 	if (b.out or {})[p] then return "out" end
-	if bkKnocked()[p] then return "knocked" end
+	if bkKnocked()[p] then return "down" end
 	return "in"
 end
 
 local function scoreGroups(b, results)
 	local groups, byTeam = {}, {}
 	for _, i in ipairs(sortedTeams(b)) do
-		local g = {name = string.format("%s  -  %d in, %d KOs", teamName(i), teamIn(b, i), (b.teamKOs or {})[i] or 0),
+		local g = {name = string.format("%s  -  %d standing, %d KOs", teamName(i), teamIn(b, i), (b.teamKOs or {})[i] or 0),
 			color = teamColor(i), rows = {}, outline = results}
 		groups[#groups + 1] = g
 		byTeam[i] = g
@@ -1330,7 +1325,7 @@ local function scoreGroups(b, results)
 		if g then
 			local k, d = (b.kos or {})[p] or 0, (b.dmg or {})[p] or 0
 			g.rows[#g.rows + 1] = {player = p, k = k, d = d,
-				columns = {tostring(k), tostring((b.elims or {})[p] or 0), tostring(math.floor(d * 100 + 0.5)), status(b, p)}}
+				columns = {tostring(k), tostring((b.revives or {})[p] or 0), tostring(math.floor(d * 100 + 0.5)), status(b, p)}}
 		end
 	end
 	for _, g in ipairs(groups) do
@@ -1368,7 +1363,7 @@ local function drawTeamScores(b)
 	UiPop()
 end
 
-local FEED_KINDS = {knockdown = true, eliminated = true, combo = true, getup = true}
+local FEED_KINDS = {knockdown = true, combo = true, getup = true}
 
 local function drawFeed(b)
 	local y = 180
@@ -1381,15 +1376,13 @@ local function drawFeed(b)
 			local text
 			if e.kind == "knockdown" then
 				text = by and (GetPlayerName(e.k) .. "  knocked down  " .. GetPlayerName(e.v)) or (GetPlayerName(e.v) .. " is down")
-			elseif e.kind == "eliminated" then
-				text = GetPlayerName(e.v) .. " is OUT" .. (by and ("  (" .. GetPlayerName(e.k) .. ")") or "")
 			elseif e.kind == "getup" then
-				text = GetPlayerName(e.v) .. " is back up"
+				text = by and (GetPlayerName(e.k) .. "  revived  " .. GetPlayerName(e.v)) or (GetPlayerName(e.v) .. " is back up")
 			else
 				text = GetPlayerName(e.k) .. "  COMBO x" .. e.hits .. "  on  " .. GetPlayerName(e.v)
 			end
 			local c = e.team ~= 0 and teamColor(e.team) or {1, 1, 1}
-			bigText(y, (e.kind == "knockdown" or e.kind == "eliminated") and 26 or 20, text, c[1], c[2], c[3], a)
+			bigText(y, e.kind == "knockdown" and 26 or 20, text, c[1], c[2], c[3], a)
 			y = y + 32
 		end
 	end
@@ -1407,36 +1400,59 @@ local function drawNames(me)
 	end
 end
 
--- your own knockdown: the time left and the small second bar (a third of the width of a full bar)
--- (the game's own health bar: data/ui/hud.lua drawHealth - 110 x 20, rounded 10, bottom right, "HEALTH" before it;
---  it hides at full health, and a knocked player's engine health is held at 1 - the knock bar takes its place)
+-- your own knockdown: DOWN, how to get up, and a revive bar where the game's own health bar is and as big (data/ui/hud.lua
+-- drawHealth - 110 x 20, rounded 10, bottom right; it hides at full health, and a downed player's engine health is held
+-- at 1): it fills while a teammate revives you
 KNOCK_BAR_W, KNOCK_BAR_H = 110, 20
 function brawlKnockBarRect() return UiWidth() - 144 + 10, UiHeight() - 44 + 4, KNOCK_BAR_W, KNOCK_BAR_H end
 
 local function drawKnocked(s)
-	bigText(UiMiddle() - 120, 44, string.format("KNOCKED DOWN - %.1f s", s.left or 0), 1, 0.85, 0.3)
-	bigText(UiMiddle() - 76, 18, "Hold on: up again when the time runs out - if the red bar lasts", 0.9, 0.9, 0.9, 0.85)
+	local rev = math.max(0, math.min(1, s.rev or 0))
+	bigText(UiMiddle() - 120, 44, "DOWN", 1, 0.85, 0.3)
+	bigText(UiMiddle() - 76, 18, rev > 0 and "Being revived - hold on" or ("Crawl to safety - a teammate inside the area can revive you (E for " .. REVIVE_TIME .. " s)"), 0.9, 0.9, 0.9, 0.85)
 	local x, y, w, h = brawlKnockBarRect()
-	local k = math.max(0, math.min(1, s.bar or 0))
 	UiPush()
 	UiTranslate(x - 10, y + 18)
 	UiAlign("right")
 	UiFont("bold.ttf", 24)
-	UiColor(1, 0.2, 0.15, 1)
-	UiText("KNOCKED")
+	UiColor(0.4, 1, 0.45, 1)
+	UiText("REVIVE")
 	UiPop()
 	UiPush()
 	UiTranslate(x, y)
 	UiAlign("left top")
 	UiColor(0, 0, 0, 0.5)
 	UiRoundedRect(w, h, 10)
-	if k > 0 then
+	if rev > 0 then
 		UiTranslate(3, 3)
-		UiColor(0.95, 0.15, 0.1, 1)
-		UiRoundedRect(math.max(12, (w - 6) * k), h - 6, 7)
+		UiColor(0.3, 0.95, 0.4, 1)
+		UiRoundedRect(math.max(12, (w - 6) * rev), h - 6, 7)
 	end
 	UiPop()
-	BRAWL_KNOCK_BAR = {w = w, h = h, fill = k}                    -- (the offline tests read it)
+	BRAWL_KNOCK_BAR = {w = w, h = h, fill = rev}                  -- (the offline tests read it)
+end
+
+-- a standing fighter next to a downed teammate: how to revive them (and how far along, while they do); outside the area
+-- (the user: only battle-ready teammates inside it can revive): "Get inside the fight area to revive ..."
+BRAWL_REVIVE_HINT = nil                                          -- (the offline tests read it)
+local function drawReviveHint(b, me)
+	BRAWL_REVIVE_HINT = nil
+	local mine, here = teamsGetTeamId(me), GetPlayerTransform(me).pos
+	local best, bestD, bestS = nil, REVIVE_RANGE + 0.8, nil
+	for q, st in pairs(bkKnocked()) do
+		if q ~= me and IsPlayerValid(q) and teamsGetTeamId(q) == mine then
+			local d = VecLength(VecSub(GetPlayerTransform(q).pos, here))
+			if d < bestD then best, bestD, bestS = q, d, st end
+		end
+	end
+	if not best then return end
+	local doing = bestS.h == me and (bestS.rev or 0) > 0
+	local outside = b.src ~= "none" and b.inside and b.inside[me] == false      -- (only from inside the area: the user)
+	BRAWL_REVIVE_HINT = outside and ("Get inside the fight area to revive " .. GetPlayerName(best))
+		or doing and string.format("Reviving %s - %d %%", GetPlayerName(best), math.floor((bestS.rev or 0) * 100 + 0.5))
+		or ("Hold E to revive " .. GetPlayerName(best))
+	if outside then bigText(UiMiddle() + 90, 26, BRAWL_REVIVE_HINT, 1, 0.55, 0.1, 0.95)
+	else bigText(UiMiddle() + 90, 26, BRAWL_REVIVE_HINT, 0.4, 1, 0.45, 0.95) end
 end
 
 local function spectating(b, me)
@@ -1448,7 +1464,7 @@ local function drawSpectate(b, me)
 		bigText(110, 28, "Spectating - joins next round", 0.85, 0.85, 0.9, 0.9)
 		bigText(145, 18, "You joined mid-round: you play from the next one (" .. teamName(teamsGetTeamId(me)) .. ")", 0.75, 0.75, 0.75, 0.85)
 	else
-		bigText(110, 30, "ELIMINATED - spectating", 1, 0.4, 0.35, 0.9)
+		bigText(110, 30, "OUT - spectating", 1, 0.4, 0.35, 0.9)
 	end
 	spectateDraw()
 	local actions = inputActionsCreate()
@@ -1477,7 +1493,10 @@ local function drawFight(b, me, dt)
 		drawSpectate(b, me)
 	elseif mine then
 		drawKnocked(mine)
-	elseif b.src ~= "none" and b.inside and b.inside[me] == false then
+	else
+		drawReviveHint(b, me)
+	end
+	if not mine and not spectating(b, me) and b.src ~= "none" and b.inside and b.inside[me] == false then
 		bigText(UiHeight() - 170, 30, "Outside the fight area: no damage", 1, 0.55, 0.1, 0.6 + 0.4 * math.abs(math.sin(GetTime() * 3)))
 	end
 	hudDrawDamageIndicators(dt)
@@ -1516,8 +1535,8 @@ local function drawResults(b)
 	local title = (b.winWhy and b.winWhy ~= "") and b.winWhy or "Brawl"
 	local top = ""
 	if (b.top or 0) ~= 0 then
-		top = string.format("Top fighter: %s - %d KOs, %d elims, %d damage", GetPlayerName(b.top), (b.kos or {})[b.top] or 0,
-			(b.elims or {})[b.top] or 0, math.floor(((b.dmg or {})[b.top] or 0) * 100 + 0.5))
+		top = string.format("Top fighter: %s - %d KOs, %d revives, %d damage", GetPlayerName(b.top), (b.kos or {})[b.top] or 0,
+			(b.revives or {})[b.top] or 0, math.floor(((b.dmg or {})[b.top] or 0) * 100 + 0.5))
 	end
 	BRAWL_RESULTS_TITLE, BRAWL_RESULTS_TOP = title, top              -- (the offline tests read them)
 	local _, bh, param = hudDrawResults(banner, color, title, COLUMNS, groups)
