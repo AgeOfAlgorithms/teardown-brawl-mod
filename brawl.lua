@@ -187,6 +187,29 @@ end
 local function combatPresent() return brawlCombatPresent() end
 local function inventoryPresent() return GetBool("inventory.present") end
 
+-- every health write of Brawl's: one that LOWERS health tells the Inventory's armour (inventory.armored.<p>) that
+-- nothing comes back for it - its wear engine gives the blocked share back of any drop since its last tick, Brawl's
+-- own too (the round's 80 %, the ledger pulling an unearned rise back, getting up at a third): the armour gave a
+-- share back, the ledger took it away, the armour saw a new drop ... every tick (the user saw health rise while hit)
+function brawlHealth(h, p)
+	if G.inv and h < GetPlayerHealth(p) - 1e-4 then SetBool("inventory.armored." .. p, true) end
+	SetPlayerHealth(h, p)
+end
+
+-- (the Inventory) no punch for the downed (inventory.nopunch.<p>: its punch works with no tool in hand, and the downed
+-- hold none) - written only when it changes; all cleared at the end (on = false)
+function brawlNoPunch(on)
+	G.noPunch = G.noPunch or {}
+	for p, was in pairs(G.noPunch) do
+		local F = on and G.fighters[p]
+		if was and not (F and F.knocked) then ClearKey("inventory.nopunch." .. p); G.noPunch[p] = nil end
+	end
+	if not on or not G.inv then return end
+	for p, F in pairs(G.fighters) do
+		if F.knocked and not G.noPunch[p] then SetBool("inventory.nopunch." .. p, true); G.noPunch[p] = true end
+	end
+end
+
 -- the McPuppet Inventory System: with the Combat System too, its fist tool goes into inventory.keeptools (what's there
 -- kept; taken out again on destroy if we put it there)
 local function inventoryKeys()
@@ -399,6 +422,7 @@ end
 function server.destroy()
 	bvServerClear()
 	climbUnblockAll()
+	brawlNoPunch(false)
 	inventoryRelease()
 	for p in Players() do SetBool("brawl.knocked." .. p, false) end
 	SetBool("brawl.active", false)
@@ -576,7 +600,7 @@ local function respawnFighter(p, F, avoid)
 	local t = spawnTransform(p, avoid)
 	if t then RespawnPlayerAtTransform(t, p) else RespawnPlayer(p) end
 	giveLoadout(p)
-	SetPlayerHealth(START_HEALTH, p)
+	brawlHealth(START_HEALTH, p)
 	F.H, F.out, F.knocked, F.grace, F.lastHurt, F.killer, F.diedBy, F.pend = START_HEALTH, nil, nil, now + GRACE, -100, nil, nil, nil
 	F.inside, F.inAt, F.shotOut = false, nil, nil
 	F.nextStrip, F.nextSel = now + 0.3, now + 0.1
@@ -587,7 +611,7 @@ end
 local function revive(p, F, hp)
 	RespawnPlayerAtTransform(GetPlayerTransform(p), p)
 	hp = math.max(0.01, math.min(1, hp or F.H))
-	SetPlayerHealth(hp, p)
+	brawlHealth(hp, p)
 	F.H, F.grace, F.killer, F.diedBy, F.pend = hp, GetTime() + GRACE, nil, nil, nil
 	F.nextSel = GetTime() + 0.1
 end
@@ -608,10 +632,18 @@ local function attackerOk(k, v)
 	if not k or k == 0 or not IsPlayerValid(k) then return now - (G.shotOut or -100) >= SHOT_FLIGHT end
 	if k == v then return true end                                           -- (yourself)
 	local A = G.fighters[k]
-	if not A or A.out or A.late then return false end                        -- (someone not in the fight)
+	if not A or A.out or A.late or A.knocked then return false end           -- (not in the fight, or down: the
+	                                                                         --  Inventory's punch works with no tool)
 	if not brawlInside(k) then return false end
 	if now - (A.shotOut or -100) < SHOT_FLIGHT then return false end         -- (their shot from outside, landing now)
 	return G.ff or teamOf(k) ~= teamOf(v)
+end
+
+-- a tool whose use from outside is a shot (a projectile that may land inside later): not the sledge, the Combat
+-- System's fists, or an Inventory melee weapon (inventory.weapons.<id>.*: its hit lands at once, where the swinger is)
+function brawlRanged(tool)
+	if tool == "none" or tool == "" or RANGED[tool] == false then return false end
+	return not HasKey("inventory.weapons." .. tool .. ".ext")
 end
 
 local function enemy(k, p) return k and k ~= 0 and k ~= p and G.fighters[k] ~= nil and teamOf(k) ~= teamOf(p) end
@@ -622,7 +654,7 @@ local function enemy(k, p) return k and k ~= 0 and k ~= p and G.fighters[k] ~= n
 local function knock(p, F, k, now)
 	local t = GetPlayerTransform(p)
 	RespawnPlayerAtTransform(Transform(t.pos, t.rot), p)
-	SetPlayerHealth(1, p)
+	brawlHealth(1, p)
 	k = k or 0
 	F.H, F.pend, F.killer, F.diedBy, F.grace = 1, nil, nil, nil, now + GRACE
 	F.knocked = {t0 = now, by = k, rev = 0, lastIn = VecCopy(t.pos)}
@@ -643,7 +675,7 @@ local function getUp(p, F, now, helper)
 	F.knocked = nil
 	if helper then G.revives[helper] = (G.revives[helper] or 0) + 1 end
 	F.H, F.lastHurt = GETUP_HEALTH, now                           -- (healing again HEAL_DELAY s from now)
-	SetPlayerHealth(GETUP_HEALTH, p)
+	brawlHealth(GETUP_HEALTH, p)
 	if G.combat then F.nextSel = 0
 	elseif F.tool and F.tool ~= "" and F.tool ~= "none" then SetPlayerTool(F.tool, p) end
 	SetBool("brawl.knocked." .. p, false)
@@ -659,7 +691,7 @@ local function handleHurt(v, b, a, k, now)
 			RespawnPlayerAtTransform(GetPlayerTransform(v), v)
 			F.grace = now + GRACE
 		end
-		SetPlayerHealth(1, v)
+		brawlHealth(1, v)
 		return
 	end
 	if valid then
@@ -674,7 +706,8 @@ local function handleHurt(v, b, a, k, now)
 	if not F then return end                                     -- (not a fighter: the lobby - nothing to undo)
 	local cur = GetPlayerHealth(v)
 	if cur <= 0 then revive(v, F, b)
-	else SetPlayerHealth(math.min(1, cur + (b - a)), v) end
+	else brawlHealth(math.min(1, b, cur + (b - a)), v) end   -- (never above the health before the hit: the
+	                                                             --  Inventory's armour may have given part back already)
 end
 
 -- every playerhurt event once (they are read from tick and postUpdate, and may show in more than one frame: a key per
@@ -732,7 +765,7 @@ local function knockTick(p, F, now, dt)
 		RespawnPlayerAtTransform(GetPlayerTransform(p), p)
 		F.grace = now + GRACE
 	end
-	if math.abs(cur - 1) > 1e-4 then SetPlayerHealth(1, p) end
+	if math.abs(cur - 1) > 1e-4 then brawlHealth(1, p) end
 	local helper = nil
 	for h, H in pairs(G.fighters) do
 		if h ~= p and not H.knocked and not H.out and not H.late and teamOf(h) == teamOf(p) and IsPlayerValid(h)
@@ -773,13 +806,13 @@ local function fighters(dt, now)
 		F.healing = false
 		if F.late then
 			DisablePlayer(p)                                      -- (no body: watching)
-			if cur > 0 then SetPlayerHealth(0, p) end
+			if cur > 0 then brawlHealth(0, p) end
 		elseif F.out then
-			if cur > 0 then SetPlayerHealth(0, p) end             -- (out: dead, spectating)
+			if cur > 0 then brawlHealth(0, p) end             -- (out: dead, spectating)
 		elseif F.knocked then
 			knockTick(p, F, now, dt)
 		elseif now < F.grace then
-			if math.abs(cur - F.H) > 1e-3 then SetPlayerHealth(F.H, p) end
+			if math.abs(cur - F.H) > 1e-3 then brawlHealth(F.H, p) end
 			keepTools(p, F, now)
 		elseif cur <= 0 then
 			if not F.pend then F.pend = G.frame
@@ -792,7 +825,7 @@ local function fighters(dt, now)
 			F.inside = brawlInside(p)
 			local tool = GetPlayerTool(p)
 			if tool ~= "none" and tool ~= "" then F.tool = tool end
-			if not F.inside and G.phase == "fight" and RANGED[tool] ~= false and tool ~= "none" and tool ~= ""
+			if not F.inside and G.phase == "fight" and brawlRanged(tool)
 				and (InputDown("usetool", p) or InputPressed("usetool", p)) then
 				F.shotOut, G.shotOut = now, now                             -- (fired from outside: see attackerOk)
 			end
@@ -806,17 +839,17 @@ local function fighters(dt, now)
 					if G.inv and F.hitT and now - F.hitT <= REFUND_WINDOW and cur <= (F.preHit or F.H) + 1e-4 then
 						F.H = cur                                              -- (armour: the blocked share back)
 					else
-						SetPlayerHealth(F.H, p)                                -- (no other healing)
+						brawlHealth(F.H, p)                                -- (no other healing)
 					end
 				end
 				if now - math.max(F.lastHurt, F.inAt) >= HEAL_DELAY and F.H < 1 then   -- (HEAL_DELAY s in, unhurt)
 					F.H = math.min(1, F.H + HEAL_RATE * dt)
-					SetPlayerHealth(F.H, p)
+					brawlHealth(F.H, p)
 					F.healing = true
 				end
 			else
 				F.inAt = nil                                               -- (the time inside starts again)
-				if math.abs(cur - F.H) > 1e-4 then SetPlayerHealth(F.H, p) end   -- (held: outside, or not fighting yet)
+				if math.abs(cur - F.H) > 1e-4 then brawlHealth(F.H, p) end   -- (held: outside, or not fighting yet)
 			end
 		end
 		if F.healing ~= (wasHealing or false) then G.healChanged = true end
@@ -988,6 +1021,7 @@ function server.tick(dt)
 	bvServerTick(not teamsIsSetup())                             -- (the lobby view: what lies above the host's cut hidden)
 	if not teamsIsSetup() then
 		for p in Players() do DisablePlayer(p) end
+		brawlNoPunch(false)
 		publish(false)
 		return
 	end
@@ -1012,6 +1046,7 @@ function server.tick(dt)
 		for p in Players() do DisablePlayerInput(p) end
 		fighters(dt, now)
 	end
+	brawlNoPunch(true)
 	publish(G.healChanged == true)                               -- (at once when someone starts / stops healing)
 	G.healChanged = false
 	publishKnock(false)
